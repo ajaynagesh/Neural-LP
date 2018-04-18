@@ -159,25 +159,25 @@ class Learner(object):
                             tf.matmul(
                                 tf.expand_dims(self.attention_memories[t], 1), 
                                 self.memories),
-                            squeeze_dims=[1])
+                            squeeze_dims=[1]) ## AJAY NOTE: 2nd part in Eq 7
             
             if t < self.num_step - 1:
                 # database_results: (will be) a list of num_operator tensors,
                 # each of size (batch_size, num_entity).
                 database_results = []    
                 memory_read = tf.transpose(memory_read)
-                for r in xrange(self.num_operator/2):
-                    for op_matrix, op_attn in zip(
+                for r in xrange(self.num_operator/2): ## AJAY NOTE: This is the computation of Eq 7
+                    for op_matrix, op_attn in zip( ## AJAY NOTE:construction of op_matrix and op_attn is not clear -- NOW CLEAR .. SEE BELOW
                                     [self.database[r], 
-                                     tf.sparse_transpose(self.database[r])],
+                                     tf.sparse_transpose(self.database[r])], ## AJAY NOTE: why transpose ? -- ANS: the same fact is also true in its inverted form .. hence the transpose here
                                     [self.attention_operators[t][r], 
-                                     self.attention_operators[t][r+self.num_operator/2]]):
-                        product = tf.sparse_tensor_dense_matmul(op_matrix, memory_read)
-                        database_results.append(tf.transpose(product) * op_attn)
+                                     self.attention_operators[t][r+self.num_operator/2]]): ## AJAY NOTE: Why num_operator/2 ? symmetry of relations ? -- ANS : YES, get the inverse relation facts here
+                        product = tf.sparse_tensor_dense_matmul(op_matrix, memory_read) ## AJAY NOTE --> (M_R_k) matmul (2nd part of eq 7)
+                        database_results.append(tf.transpose(product) * op_attn) ## AJAY NOTE: multiply with op_attn to complete  eq 7 (1st part done here)
 
-                added_database_results = tf.add_n(database_results)
+                added_database_results = tf.add_n(database_results) ## AJAY NOTE: summation of eq 7 ( \Sigma_k^{|R|} )
                 if self.norm:
-                    added_database_results /= tf.maximum(self.thr, tf.reduce_sum(added_database_results, axis=1, keep_dims=True))                
+                    added_database_results /= tf.maximum(self.thr, tf.reduce_sum(added_database_results, axis=1, keep_dims=True))  ## AJAY NOTE: normalization of vectors to be unit norm
                 
                 if self.dropout > 0.:
                   added_database_results = tf.nn.dropout(added_database_results, keep_prob=1.-self.dropout)
@@ -190,8 +190,10 @@ class Learner(object):
             else:
                 self.predictions = memory_read
                            
-        self.final_loss = - tf.reduce_sum(self.targets * tf.log(tf.maximum(self.predictions, self.thr)), 1)
-        
+        self.final_loss = - tf.reduce_sum(self.targets * tf.log(tf.maximum(self.predictions, self.thr)), 1) ## AJAY NOTE: What about cases where self.targets = 0 ? Will there be no loss ? ANS: this is a one hot embedding of y^T .. u will multiple that with predictions to get [y^T . log(u)] .. for the current head (y) it computes the confidence of the predictions .. negative of that will be the loss
+
+        ### AJAY NOTE: compute the accuracy of the head being in the top_k of the actual response
+        ######################################
         if not self.accuracy:
             self.in_top = tf.nn.in_top_k(
                             predictions=self.predictions, 
@@ -206,6 +208,7 @@ class Learner(object):
         capped_gvs = map(
             lambda (grad, var): self._clip_if_not_None(grad, var, -5., 5.), gvs) 
         self.optimizer_step = self.optimizer.apply_gradients(capped_gvs)
+        ######################################
 
     def _run_graph(self, sess, qq, hh, tt, mdb, to_fetch):
         feed = {}
@@ -218,9 +221,25 @@ class Learner(object):
                                   for q in qq]
 
         feed[self.heads] = hh 
-        feed[self.tails] = tt 
+        feed[self.tails] = tt
+
+        # In[232]: data.matrix_db[0][0][:7]
+        # Out[232]:
+        # [[0, 0],
+        #  [2675, 2698],
+        #  [2268, 2274],
+        #  [2713, 1240],
+        #  [1978, 2013],
+        #  [2417, 1881],
+        #  [2068, 701]]
+        #
+        # In[233]: data.matrix_db[0][1][:7]
+        # Out[233]: [0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        #
+        # In[234]: data.matrix_db[0][2]
+        # Out[234]: [3007, 3007]
         for r in xrange(self.num_operator / 2):
-            feed[self.database[r]] = tf.SparseTensorValue(*mdb[r]) 
+            feed[self.database[r]] = tf.SparseTensorValue(*mdb[r])  ## AJAY NOTE: constructs a sparse tensor from indices, values and dense shape for every relation ( by 2 is for symmetric relations)
         fetches = to_fetch
         graph_output = sess.run(fetches, feed)
         return graph_output
